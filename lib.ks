@@ -1,15 +1,19 @@
 
 @lazyGlobal off.
 
-// boilerplate code
-clearScreen.
-sas off.
+function boilerplate {
+    clearScreen.
+    sas off.
+}
+boilerplate().
 
-// sigmoid(delta) * 2 - 1
-function sCurve {
+function stopAutomaticExecution { // stops other scripts from running stuff immediately and just use them as a library instead
+    global automaticExecution to False. // other scripts check for existence, not value, so be aware of that
+}
+
+function sCurve { // sigmoid(delta) * 2 - 1
     parameter delta.
-    if delta < -100
-        return -1.
+    if delta < -100 return -1.
     local exp to constant:E ^ (-delta).
     return (1 - exp) / (1 + exp).
 }
@@ -25,11 +29,19 @@ function getThrottle {
     return thr * alpha + max(sCurve((desired - actual) / smoothness), 0) * (1 - alpha).
 }
 
-// warp for a specified number of seconds
-function warpFor {
+local _trackChanges to list(0, 0, 0, 0, 0, 0, 0, 0, 0, 0).
+function trackChanges {
+    parameter variableIndex. // what variable #no are we tracking?
+    parameter value. // the current value
+    parameter threshold to 0.1. // if changes more than 10%, then notify that something is up
+    local oldValue to _trackChanges[variableIndex].
+    set _trackChanges[variableIndex] to value.
+    return abs(oldValue - value) > abs(value) * threshold.
+}
+
+function warpFor { // warp for a specified number of seconds
     parameter seconds.
-    if seconds < 0
-        return.
+    if seconds < 0 return.
     local rates to kuniverse:timewarp:ratelist.
     local idx to rates:length - 1.
     until idx < 0 {
@@ -43,82 +55,61 @@ function warpFor {
     set kuniverse:timewarp:warp to 0.
 }
 
-function argmax {
-    parameter list_.
-    local maxIdx_ to -1.
-    local max_ to -1e50.
-    local idx to 0.
-    until idx >= list_:length {
-        if list_[idx] > max_ {
-            set max_ to list_[idx].
-            set maxIdx_ to idx.
-        }
-        set idx to idx + 1.
-    }
-    return maxIdx_.
-}
-
-function argmin {
-    parameter list_.
-    local minIdx_ to -1.
-    local min_ to 1e50.
-    local idx to 0.
-    until idx >= list_:length {
-        if list_[idx] < min_ {
-            set min_ to list_[idx].
-            set minIdx_ to idx.
-        }
-        set idx to idx + 1.
-    }
-    return minIdx_.
-}
-
-// whether 2 numbers are close to each other
-function close {
+function close { // whether 2 numbers are close to each other
     parameter a, b, epsilon to 0.01.
     return abs(a - b) < epsilon.
 }
 
-// setup automatic staging
-function automaticStaging {
-    local lastMaxThrust to ship:maxthrust.
-    when ship:maxthrust < lastMaxThrust * 0.9 or ship:maxthrust = 0 then {
-        print "Staging...".
-        wait 1. stage. wait 1.
-        set lastMaxThrust to ship:maxthrust.
-        preserve.
+function automaticStaging { // setup automatic staging
+    trackChanges(9, ship:maxthrust).
+    when trackChanges(9, ship:maxthrust) or ship:maxthrust = 0 then {
+        print "Staging...". wait 0.2. stage. wait 0.2. preserve.
     }
 }
 
 local voiceObj_ to getvoice(0).
-// plays a beeping sound
-function beep {
+function beep { // plays a beeping sound
     voiceObj_:play(note(440, 1)).
 }
 
-function _correctR {
-    parameter altitude_.
-    return altitude_ + ship:body:radius.
+function acceleration { // calculates the current acceleration.
+    local vStart to ship:velocity:orbit:mag.
+    wait 0.01.
+    local vEnd to ship:velocity:orbit:mag.
+    return (vEnd - vStart) / 0.01.
 }
 
-function _getV { // vis-visa eqn
-    parameter r, a.
-    return sqrt(ship:body:mu * (2 / r - 1 / a)).
-}
-
-function hohmannDeltaV {
-    parameter targetAltitude.
-    parameter ship_ to ship.
-    return _getV(_correctR(ship_:altitude), (_correctR(ship_:altitude) + _correctR(targetAltitude)) / 2) - _getV(_correctR(ship_:altitude), (_correctR(ship:orbit:periapsis) + _correctR(ship:orbit:apoapsis)) / 2).
-}
-
-local persistentStartTime_ to 20.
-function predictLandingTime {
-    parameter cachedStartTime to persistentStartTime_.
-    local startTime to cachedStartTime - 10. // first predict the cache - 10.
-    until (positionAt(ship, startTime) - ship:body:position):mag - ship:body:radius < 0 {
-        set startTime to startTime + 1.
+function getTargets { // given a list of strings, get the targets with those names and return the list
+    parameter targetNames.
+    local _targets to list().
+    list targets in _targets.
+    local answer to list().
+    for targetName in targetNames {
+        local found to false.
+        for _target in _targets {
+            if _target:name = targetName{
+                answer:add(_target).
+                set found to true.
+                break.
+            }
+        }
+        if (not found) print(targetName + " not found").
     }
-    set persistentStartTime_ to startTime.
-    return startTime.
+    return answer.
+}
+
+function offsetFromGeo { // get offsetted geolocation from another geoposition
+    parameter metersNorth.
+    parameter metersEast.
+    parameter location to ship:geoPosition.
+    local degreesNorth to location:lat + metersNorth * 180 / (ship:body:radius * constant:pi).
+    local degreesEast to location:lng + metersEast * 180 / (ship:body:radius * constant:pi).
+    return latlng(degreesNorth, degreesEast).
+}
+
+function pointingInSameDirection {
+    parameter v1.
+    parameter v2 to ship:facing:vector.
+    parameter maxAngleDifference to 3.
+    return vang(v1, v2) < maxAngleDifference.
 }
